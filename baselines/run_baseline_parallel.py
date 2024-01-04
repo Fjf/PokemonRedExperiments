@@ -1,3 +1,4 @@
+import os
 from os.path import exists
 from pathlib import Path
 import uuid
@@ -28,7 +29,6 @@ def make_env(rank, env_conf, seed=0):
 
 
 if __name__ == '__main__':
-
     ep_length = 2048 * 8
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
@@ -40,14 +40,14 @@ if __name__ == '__main__':
         'use_screen_explore': True, 'extra_buttons': False
     }
 
-    num_cpu = 1  # 64 #46  # Also sets the number of episodes per training iteration
+    num_cpu = 1 # 64 #46  # Also sets the number of episodes per training iteration
     env = SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
 
     checkpoint_callback = CheckpointCallback(save_freq=ep_length, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
     learn_steps = 40
-    file_name = 'session_e41c9eff/poke_38207488_steps'
+    file_name = 'wakuwaku'
 
     if exists(file_name + '.zip'):
         print('\nloading checkpoint')
@@ -61,7 +61,6 @@ if __name__ == '__main__':
         model = PPO(
             'CnnPolicy',
             env,
-            # policy_kwargs={"channels": 7},
             verbose=1,
             n_steps=ep_length,
             batch_size=512,
@@ -70,4 +69,4 @@ if __name__ == '__main__':
         )
 
     for i in range(learn_steps):
-        model.learn(total_timesteps=(ep_length) * num_cpu * 1000, callback=checkpoint_callback)
+        model.learn(total_timesteps=ep_length * num_cpu * 1000, callback=checkpoint_callback)

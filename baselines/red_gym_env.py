@@ -404,8 +404,9 @@ class RedGymEnv(Env):
             if self.save_final_state:
                 fs_path = self.s_path / Path('final_states')
                 fs_path.mkdir(exist_ok=True)
-                image = obs_memory[0].unsqueeze()
-                image = np.repeat(image, 3, 2)
+                image = obs_memory[-self.frame_stacks].reshape((1, *obs_memory[0].shape))
+                image = np.repeat(image, 3, 0)
+                image = image.swapaxes(0, 2)
                 plt.imsave(
                     fs_path / Path(f'frame_r{self.total_reward:.4f}_{self.reset_count}_small.jpeg'),
                     image)
