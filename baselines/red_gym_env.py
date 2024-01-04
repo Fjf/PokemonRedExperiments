@@ -1,3 +1,4 @@
+from collections import defaultdict
 import sys
 import uuid
 import os
@@ -28,7 +29,6 @@ class RedGymEnv(Env):
         self.s_path = config['session_path']
         self.save_final_state = config['save_final_state']
         self.print_rewards = config['print_rewards']
-        self.vec_dim = 4320  # 1000
         self.headless = config['headless']
         self.num_elements = 20000  # max
         self.init_state = config['init_state']
@@ -39,7 +39,7 @@ class RedGymEnv(Env):
         self.fast_video = config['fast_video']
         self.video_interval = 256 * self.act_freq
         self.downsample_factor = 2
-        self.frame_stacks = 3
+        self.frame_stacks = 8 # TODO: increase history
         self.explore_weight = 1 if 'explore_weight' not in config else config['explore_weight']
         self.use_screen_explore = True if 'use_screen_explore' not in config else config['use_screen_explore']
         self.similar_frame_dist = config['sim_frame_dist']
@@ -82,6 +82,8 @@ class RedGymEnv(Env):
         ]
 
         self.output_shape = (36, 40)
+        self.vec_dim = self.output_shape[0] * self.output_shape[1]
+
         # self.mem_padding = 2
         # self.memory_height = 8
 
@@ -90,7 +92,8 @@ class RedGymEnv(Env):
 
         self.col_steps = 16
         self.output_full = (
-            self.frame_stacks + self.memory_stack + self.exploration_stack,
+            #self.frame_stacks + self.memory_stack + self.exploration_stack,
+            self.frame_stacks,
             self.output_shape[0],
             self.output_shape[1],
         )
@@ -98,6 +101,8 @@ class RedGymEnv(Env):
         # Set these in ALL subclasses
         self.action_space = spaces.Discrete(len(self.valid_actions))
         self.observation_space = spaces.Box(low=0, high=255, shape=self.output_full, dtype=np.uint8)
+
+
 
         head = 'headless' if config['headless'] else 'SDL2'
 
@@ -134,6 +139,7 @@ class RedGymEnv(Env):
             self.output_shape[1],
         ), dtype=np.uint8)
 
+        # Keeps track of the frame_stacks number of past frames
         self.recent_frames = np.zeros((
             self.frame_stacks,
             self.output_shape[0],
@@ -165,6 +171,8 @@ class RedGymEnv(Env):
         self.progress_reward = self.get_game_state_reward()
         self.total_reward = sum([val for _, val in self.progress_reward.items()])
         self.reset_count += 1
+        self.cum_percentage_new_frames = 0
+        self.frame_seen_counter = defaultdict(int)
         return self.render(), {}
 
     def init_knn(self):
@@ -180,13 +188,22 @@ class RedGymEnv(Env):
     def render(self, reduce_res=True, add_memory=True, update_mem=True):
         game_pixels_render = self.screen.screen_ndarray()  # (144, 160, 3)
         game_pixels_render = game_pixels_render[:, :, 0]  # Drop rgb to greyscale
-        if reduce_res:
-
+        # Resize rendered screen to custom output shape. By default (144, 160) -> (36, 40) and scale to image
+        if reduce_res: 
             game_pixels_render = (255 * resize(game_pixels_render, self.output_shape)).astype(np.uint8)
+            
+            # Add current screen render to frame memory
             if update_mem:
                 self.recent_frames[0, :, :] = game_pixels_render
-            if add_memory:
 
+            # cm = self.create_exploration_memory()
+            # with np.printoptions(threshold=np.inf):
+            #     print("exploration memory shape", cm.shape)
+            #     print(cm[1,:,:])
+            # print("recent memory shape ", self.recent_memory.shape)
+            add_memory = False
+            game_pixels_render = self.recent_frames
+            if add_memory:
                 game_pixels_render = np.concatenate((
                     self.create_exploration_memory(),
                     self.recent_memory,
@@ -199,13 +216,13 @@ class RedGymEnv(Env):
         self.run_action_on_emulator(action)
         self.append_agent_stats(action)
 
+        #
         self.recent_frames = np.roll(self.recent_frames, 1, axis=0)
         obs_memory = self.render()
-
-        obs_flat = obs_memory[-self.frame_stacks:].flatten().astype(np.float32)
+        # obs_flat = obs_memory[-self.frame_stacks].flatten().astype(np.float32)
 
         if self.use_screen_explore:
-            self.update_frame_knn_index(obs_flat)
+            self.update_frame_knn_index(self.recent_frames[0])
         else:
             self.update_seen_coords()
 
@@ -283,13 +300,16 @@ class RedGymEnv(Env):
         })
 
     def update_frame_knn_index(self, frame_vec):
-
+        frame_vec = frame_vec.flatten().astype(np.float32)
         if self.get_levels_sum() >= 22 and not self.levels_satisfied:
             self.levels_satisfied = True
             self.base_explore = self.knn_index.get_current_count()
             self.init_knn()
 
+
         if self.knn_index.get_current_count() == 0:
+            # Increment how many times we have seen this frame for reward
+            self.frame_seen_counter[self.knn_index.get_current_count()] += 1
             # if index is empty add current frame
             self.knn_index.add_items(
                 frame_vec, np.array([self.knn_index.get_current_count()])
@@ -297,11 +317,19 @@ class RedGymEnv(Env):
         else:
             # check for nearest frame and add if current 
             labels, distances = self.knn_index.knn_query(frame_vec, k=1)
+
             if distances[0][0] > self.similar_frame_dist:
+                # Increment how many times we have seen this frame for reward
+                self.frame_seen_counter[self.knn_index.get_current_count()] += 1
+
                 # print(f"distances[0][0] : {distances[0][0]} similar_frame_dist : {self.similar_frame_dist}")
                 self.knn_index.add_items(
                     frame_vec, np.array([self.knn_index.get_current_count()])
                 )
+            else:
+
+                # Increment how many times we have seen this frame for reward
+                self.frame_seen_counter[labels[0][0]] += 1
 
     def update_seen_coords(self):
         x_pos = self.read_m(0xD362)
@@ -320,8 +348,7 @@ class RedGymEnv(Env):
         old_prog = self.group_rewards()
         self.progress_reward = self.get_game_state_reward()
         new_prog = self.group_rewards()
-        new_total = sum(
-            [val for _, val in self.progress_reward.items()])  # sqrt(self.explore_reward * self.progress_reward)
+        new_total = sum(self.progress_reward.values())
         new_step = new_total - self.total_reward
         if new_step < 0 and self.read_hp_fraction() > 0:
             # print(f'\n\nreward went down! {self.progress_reward}\n\n')
@@ -444,10 +471,33 @@ class RedGymEnv(Env):
         self.max_level_rew = max(self.max_level_rew, scaled)
         return self.max_level_rew
 
+
+
     def get_knn_reward(self):
+        
 
         pre_rew = self.explore_weight * 0.005
         post_rew = self.explore_weight * 0.01
+        new_implementation = True
+
+        # Base reward based on similarity of frame stack history instead of only newest one
+        if new_implementation:
+            if self.knn_index.get_current_count() == 0: return 0
+
+            times_seen = np.zeros(len(self.recent_frames))
+            for i, frame in enumerate(self.recent_frames):
+                frame = frame.flatten().astype(np.float32)
+                labels, _ = self.knn_index.knn_query(frame, k=1)
+                label = labels[0][0] 
+                times_seen[i] = 1 / max(1, self.frame_seen_counter[label] - 4)
+
+            scalars = np.ones(len(self.recent_frames))
+            for i in range(len(scalars)):
+                scalars[i] = 1 / (2 + i)
+            scalars /= scalars.sum()
+            percentage_new_frames = np.sum(times_seen * scalars) * pre_rew
+            self.cum_percentage_new_frames += percentage_new_frames
+            return self.cum_percentage_new_frames
         cur_size = self.knn_index.get_current_count() if self.use_screen_explore else len(self.seen_coords)
         base = (self.base_explore if self.levels_satisfied else cur_size) * pre_rew
         post = (cur_size if self.levels_satisfied else 0) * post_rew
