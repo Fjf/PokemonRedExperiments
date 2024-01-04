@@ -65,4 +65,3 @@ Check out these awesome projects!
 <a href="https://github.com/DLR-RM/stable-baselines3">
   <img src="/assets/sblogo.png" height="64">
 </a>
-a
