@@ -2,6 +2,8 @@ import os
 from os.path import exists
 from pathlib import Path
 import uuid
+
+from baselines.fast_subproc_vec_env import StaggeredSubprocVecEnv
 from red_gym_env import RedGymEnv
 from stable_baselines3 import A2C, PPO
 from stable_baselines3.common import env_checker
@@ -28,8 +30,8 @@ def make_env(rank, env_conf, seed=0):
     return _init
 
 
-if __name__ == '__main__':
-    ep_length = 2048 * 8
+def main():
+    ep_length = 2048
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
     env_config = {
@@ -40,14 +42,14 @@ if __name__ == '__main__':
         'use_screen_explore': True, 'extra_buttons': False
     }
 
-    num_cpu = 1 # 64 #46  # Also sets the number of episodes per training iteration
-    env = SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
+    num_cpu = 1  # 64 #46  # Also sets the number of episodes per training iteration
+    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
 
     checkpoint_callback = CheckpointCallback(save_freq=ep_length, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
-    learn_steps = 40
-    file_name = 'wakuwaku'
+    learn_steps = 1
+    file_name = 'session_df7ac7d6/poke_622592_steps'
 
     if exists(file_name + '.zip'):
         print('\nloading checkpoint')
@@ -69,4 +71,8 @@ if __name__ == '__main__':
         )
 
     for i in range(learn_steps):
-        model.learn(total_timesteps=ep_length * num_cpu * 1000, callback=checkpoint_callback)
+        model.learn(total_timesteps=ep_length * num_cpu, callback=checkpoint_callback)
+
+
+if __name__ == '__main__':
+    main()
