@@ -40,7 +40,7 @@ def main():
     env_config = {
         'headless': True, 'save_final_state': True, 'early_stop': False,
         'action_freq': 24, 'init_state': '../has_pokedex_nballs.state', 'max_steps': ep_length,
-        'print_rewards': True, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
+        'print_rewards': 100, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
         'gb_path': '../PokemonRed.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0,
         'use_screen_explore': True, 'extra_buttons': False
     }
@@ -68,7 +68,7 @@ def main():
         model = PPO(
             'CnnPolicy',
             env,
-            verbose=1,
+            verbose=0,
             n_steps=ep_length,
             batch_size=512,
             n_epochs=1,

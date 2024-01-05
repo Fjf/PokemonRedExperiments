@@ -414,7 +414,7 @@ class RedGymEnv(Env):
         return done
 
     def save_and_print_info(self, done, obs_memory):
-        if self.print_rewards:
+        if self.print_rewards > 0 and self.step_count % self.print_rewards == 0:
             prog_string = f'step: {self.step_count:6d}'
             for key, val in self.progress_reward.items():
                 prog_string += f' {key}: {val:5.2f}'
