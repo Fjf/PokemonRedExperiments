@@ -300,7 +300,7 @@ class RedGymEnv(Env):
         })
 
     def update_frame_knn_index(self, frame_vec):
-        frame_vec = frame_vec.flatten().astype(np.float32)
+        frame_vec = frame_vec.flatten().astype(np.float16)
         if self.get_levels_sum() >= 22 and not self.levels_satisfied:
             self.levels_satisfied = True
             self.base_explore = self.knn_index.get_current_count()
@@ -421,13 +421,13 @@ class RedGymEnv(Env):
             prog_string += f' sum: {self.total_reward:5.2f}'
             print(f'\r{prog_string}', end='', flush=True)
 
-        if self.step_count % 50 == 0:
-            plt.imsave(
-                self.s_path / Path(f'curframe_{self.instance_id}.jpeg'),
-                self.render(reduce_res=False))
+        # if self.step_count % 50 == 0:
+        #     plt.imsave(
+        #         self.s_path / Path(f'curframe_{self.instance_id}.jpeg'),
+        #         self.render(reduce_res=True))
 
-        if self.print_rewards and done:
-            print('', flush=True)
+        if self.print_rewards > 0 and done:
+            # print('', flush=True)
             if self.save_final_state:
                 fs_path = self.s_path / Path('final_states')
                 fs_path.mkdir(exist_ok=True)
@@ -486,7 +486,7 @@ class RedGymEnv(Env):
 
             times_seen = np.zeros(len(self.recent_frames))
             for i, frame in enumerate(self.recent_frames):
-                frame = frame.flatten().astype(np.float32)
+                frame = frame.flatten().astype(np.float16)
                 labels, _ = self.knn_index.knn_query(frame, k=1)
                 label = labels[0][0] 
                 times_seen[i] = 1 / max(1, self.frame_seen_counter[label] - 4)

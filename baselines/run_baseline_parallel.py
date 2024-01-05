@@ -1,5 +1,4 @@
 import os
-from os.path import exists
 import uuid
 from os.path import exists
 from pathlib import Path
@@ -7,7 +6,6 @@ from pathlib import Path
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from fast_subproc_vec_env import StaggeredSubprocVecEnv
 from red_gym_env import RedGymEnv
@@ -32,7 +30,7 @@ def make_env(rank, env_conf, seed=0):
 
 
 def main():
-    stagger_count = 4
+    stagger_count = 3
     ep_length = 2048 * 8 * stagger_count
 
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
@@ -68,7 +66,7 @@ def main():
         model = PPO(
             'CnnPolicy',
             env,
-            verbose=0,
+            verbose=1,
             n_steps=ep_length,
             batch_size=512,
             n_epochs=1,
