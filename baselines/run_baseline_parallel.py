@@ -31,7 +31,7 @@ def make_env(rank, env_conf, seed=0):
 
 def main():
     stagger_count = 3
-    ep_length = 2048 * 8 * stagger_count
+    ep_length = 2048 * 8
 
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
@@ -43,12 +43,13 @@ def main():
         'use_screen_explore': True, 'extra_buttons': False
     }
 
+
     # Get core count from SLURM or fall back on max CPUs on machine.
-    num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
+    num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count())) // 2
 
     env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)], stagger_count=stagger_count)
 
-    checkpoint_callback = CheckpointCallback(save_freq=ep_length, save_path=sess_path,
+    checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
     learn_steps = 40
@@ -57,9 +58,9 @@ def main():
     if exists(file_name + '.zip'):
         print('\nloading checkpoint')
         model = PPO.load(file_name, env=env)
-        model.n_steps = ep_length
+        model.n_steps = ep_length * stagger_count
         model.n_envs = num_cpu
-        model.rollout_buffer.buffer_size = ep_length
+        model.rollout_buffer.buffer_size = ep_length * stagger_count
         model.rollout_buffer.n_envs = num_cpu
         model.rollout_buffer.reset()
     else:
@@ -67,14 +68,14 @@ def main():
             'CnnPolicy',
             env,
             verbose=1,
-            n_steps=ep_length,
+            n_steps=ep_length * stagger_count,
             batch_size=512,
             n_epochs=1,
             gamma=0.999
         )
 
     for i in range(learn_steps):
-        model.learn(total_timesteps=ep_length * num_cpu * 1000, callback=checkpoint_callback)
+        model.learn(total_timesteps=ep_length * stagger_count * num_cpu * 1000, callback=checkpoint_callback)
 
 
 if __name__ == '__main__':
