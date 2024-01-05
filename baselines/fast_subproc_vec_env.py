@@ -104,6 +104,10 @@ class StaggeredSubprocVecEnv(VecEnv):
         return flat_obs
 
     def reset(self) -> VecEnvObs:
+        if self.stagger != -1:
+            # Cleanup in-transit messages
+            self.step_wait()
+
         for env_idx, remote in enumerate(self._remotes):
             remote.send(("reset", self._seeds[env_idx % self.n_envs]))
 

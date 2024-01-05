@@ -32,7 +32,9 @@ def make_env(rank, env_conf, seed=0):
 
 
 def main():
-    ep_length = 2048 * 8
+    stagger_count = 4
+    ep_length = 2048 * 8 * stagger_count
+
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
     env_config = {
@@ -46,7 +48,7 @@ def main():
     # Get core count from SLURM or fall back on max CPUs on machine.
     num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
 
-    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)], stagger_count=6)
+    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)], stagger_count=stagger_count)
 
     checkpoint_callback = CheckpointCallback(save_freq=ep_length, save_path=sess_path,
                                              name_prefix='poke')
