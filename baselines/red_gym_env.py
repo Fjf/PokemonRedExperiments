@@ -39,7 +39,7 @@ class RedGymEnv(Env):
         self.fast_video = config['fast_video']
         self.video_interval = 256 * self.act_freq
         self.downsample_factor = 2
-        self.frame_stacks = 8 # TODO: increase history
+        self.frame_stacks = 6
         self.explore_weight = 1 if 'explore_weight' not in config else config['explore_weight']
         self.use_screen_explore = True if 'use_screen_explore' not in config else config['use_screen_explore']
         self.similar_frame_dist = config['sim_frame_dist']
@@ -92,7 +92,7 @@ class RedGymEnv(Env):
 
         self.col_steps = 16
         self.output_full = (
-            #self.frame_stacks + self.memory_stack + self.exploration_stack,
+            # self.frame_stacks + self.memory_stack + self.exploration_stack,
             self.frame_stacks,
             self.output_shape[0],
             self.output_shape[1],
@@ -101,8 +101,6 @@ class RedGymEnv(Env):
         # Set these in ALL subclasses
         self.action_space = spaces.Discrete(len(self.valid_actions))
         self.observation_space = spaces.Box(low=0, high=255, shape=self.output_full, dtype=np.uint8)
-
-
 
         head = 'headless' if config['headless'] else 'SDL2'
 
@@ -122,7 +120,8 @@ class RedGymEnv(Env):
 
         self.reset()
 
-    def reset(self, seed=None, **kwargs):
+    def reset(self, seed=None, rank=None, **kwargs):
+        self.rank = rank
         self.seed = seed
         # restart game, skipping credits
         with open(self.init_state, "rb") as f:
@@ -189,9 +188,9 @@ class RedGymEnv(Env):
         game_pixels_render = self.screen.screen_ndarray()  # (144, 160, 3)
         game_pixels_render = game_pixels_render[:, :, 0]  # Drop rgb to greyscale
         # Resize rendered screen to custom output shape. By default (144, 160) -> (36, 40) and scale to image
-        if reduce_res: 
+        if reduce_res:
             game_pixels_render = (255 * resize(game_pixels_render, self.output_shape)).astype(np.uint8)
-            
+
             # Add current screen render to frame memory
             if update_mem:
                 self.recent_frames[0, :, :] = game_pixels_render
@@ -216,8 +215,11 @@ class RedGymEnv(Env):
         self.run_action_on_emulator(action)
         self.append_agent_stats(action)
 
-        #
-        self.recent_frames = np.roll(self.recent_frames, 1, axis=0)
+        # Create exponential history for frame stacking
+        for i in reversed(range(len(self.recent_frames) - 1)):
+            if self.step_count % (2 ** i):
+                self.recent_frames[i + 1] = self.recent_frames[i]
+
         obs_memory = self.render()
         # obs_flat = obs_memory[-self.frame_stacks].flatten().astype(np.float32)
 
@@ -305,7 +307,6 @@ class RedGymEnv(Env):
             self.levels_satisfied = True
             self.base_explore = self.knn_index.get_current_count()
             self.init_knn()
-
 
         if self.knn_index.get_current_count() == 0:
             # Increment how many times we have seen this frame for reward
@@ -415,19 +416,18 @@ class RedGymEnv(Env):
 
     def save_and_print_info(self, done, obs_memory):
         if self.print_rewards > 0 and self.step_count % self.print_rewards == 0:
-            prog_string = f'step: {self.step_count:6d}'
-            for key, val in self.progress_reward.items():
-                prog_string += f' {key}: {val:5.2f}'
-            prog_string += f' sum: {self.total_reward:5.2f}'
+            prog_string = self.get_prog_string()
             print(f'\r{prog_string}', end='', flush=True)
 
-        # if self.step_count % 50 == 0:
-        #     plt.imsave(
-        #         self.s_path / Path(f'curframe_{self.instance_id}.jpeg'),
-        #         self.render(reduce_res=True))
+        if self.step_count % 100 == 0:
+            plt.imsave(
+                self.s_path / Path(f'curframe_{self.instance_id}.jpeg'),
+                self.render(reduce_res=False))
 
         if self.print_rewards > 0 and done:
             # print('', flush=True)
+            prog_string = self.get_prog_string()
+            print(f'{prog_string}', flush=True)
             if self.save_final_state:
                 fs_path = self.s_path / Path('final_states')
                 fs_path.mkdir(exist_ok=True)
@@ -448,6 +448,13 @@ class RedGymEnv(Env):
                 json.dump(self.all_runs, f)
             pd.DataFrame(self.agent_stats).to_csv(
                 self.s_path / Path(f'agent_stats_{self.instance_id}.csv.gz'), compression='gzip', mode='a')
+
+    def get_prog_string(self):
+        prog_string = f'step: {self.step_count:6d}'
+        for key, val in self.progress_reward.items():
+            prog_string += f' {key}: {val:5.2f}'
+        prog_string += f' sum: {self.total_reward:5.2f}'
+        return prog_string
 
     def read_m(self, addr):
         return self.pyboy.get_memory_value(addr)
@@ -471,10 +478,7 @@ class RedGymEnv(Env):
         self.max_level_rew = max(self.max_level_rew, scaled)
         return self.max_level_rew
 
-
-
     def get_knn_reward(self):
-        
 
         pre_rew = self.explore_weight * 0.005
         post_rew = self.explore_weight * 0.01
@@ -488,8 +492,8 @@ class RedGymEnv(Env):
             for i, frame in enumerate(self.recent_frames):
                 frame = frame.flatten().astype(np.float16)
                 labels, _ = self.knn_index.knn_query(frame, k=1)
-                label = labels[0][0] 
-                times_seen[i] = 1 / max(1, self.frame_seen_counter[label] - 4)
+                label = labels[0][0]
+                times_seen[i] = 1 / max(1, self.frame_seen_counter[label])
 
             scalars = np.ones(len(self.recent_frames))
             for i in range(len(scalars)):
@@ -572,7 +576,7 @@ class RedGymEnv(Env):
             'level': self.reward_scale * self.get_levels_reward(),
             'heal': self.reward_scale * self.total_healing_rew,
             'op_lvl': self.reward_scale * self.update_max_op_level(),
-            'dead': self.reward_scale * -0.1 * self.died_count,
+            'dead': self.reward_scale * -0.000001 * self.died_count,
             'badge': self.reward_scale * self.get_badges() * 5,
             # 'op_poke': self.reward_scale*self.max_opponent_poke * 800,
             # 'money': self.reward_scale* money * 3,

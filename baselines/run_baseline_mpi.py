@@ -3,18 +3,17 @@ import uuid
 from os.path import exists
 from pathlib import Path
 
+from mpi4py import MPI
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.utils import set_random_seed
 
 from utils import make_env
 from fast_subproc_vec_env import StaggeredSubprocVecEnv
-from red_gym_env import RedGymEnv
-
+from mpi_env import main_mpi, mpi_worker, StaggeredMPIEnv
 
 
 def main():
-    stagger_count = 4
+    stagger_count = 2
     ep_length = 2048 * 8
 
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
@@ -27,12 +26,12 @@ def main():
         'use_screen_explore': True, 'extra_buttons': False
     }
 
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    if rank > 0:
+        main_mpi(env_config)
 
-    # Get core count from SLURM or fall back on max CPUs on machine.
-    num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count())) // 2
-
-    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu * stagger_count)], stagger_count=stagger_count)
-
+    env = StaggeredMPIEnv(comm, stagger_count=stagger_count)
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
@@ -43,9 +42,9 @@ def main():
         print('\nloading checkpoint')
         model = PPO.load(file_name, env=env)
         model.n_steps = ep_length * stagger_count
-        model.n_envs = num_cpu
+        model.n_envs = (comm.Get_size() - 1) // stagger_count
         model.rollout_buffer.buffer_size = ep_length * stagger_count
-        model.rollout_buffer.n_envs = num_cpu
+        model.rollout_buffer.n_envs = (comm.Get_size() - 1) // stagger_count
         model.rollout_buffer.reset()
     else:
         model = PPO(
@@ -59,7 +58,7 @@ def main():
         )
 
     for i in range(learn_steps):
-        model.learn(total_timesteps=ep_length * stagger_count * num_cpu * 1000, callback=checkpoint_callback)
+        model.learn(total_timesteps=ep_length * comm.Get_size() * 1000, callback=checkpoint_callback)
 
 
 if __name__ == '__main__':

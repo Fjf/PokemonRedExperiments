@@ -1,5 +1,4 @@
 import multiprocessing as mp
-import traceback
 import warnings
 from typing import Any, Callable, List, Optional, Sequence, Type
 
@@ -42,7 +41,7 @@ class StaggeredSubprocVecEnv(VecEnv):
     def __init__(self, env_fns: List[Callable[[], gym.Env]], start_method: Optional[str] = None, stagger_count=6):
         self.waiting = False
         self.closed = False
-        self.n_envs = len(env_fns)
+        self.n_envs = len(env_fns) // stagger_count
 
         if start_method is None:
             # Fork is not a thread safe method (see issue #217)
@@ -55,9 +54,9 @@ class StaggeredSubprocVecEnv(VecEnv):
         self.stagger = -1
         self.stagger_count = stagger_count
 
-        self._remotes, self._work_remotes = zip(*[ctx.Pipe() for _ in range(self.n_envs * self.stagger_count)])
+        self._remotes, self._work_remotes = zip(*[ctx.Pipe() for _ in range(self.n_envs * stagger_count)])
         self.processes = []
-        for work_remote, remote, env_fn in zip(self._work_remotes, self._remotes, env_fns * self.stagger_count):
+        for work_remote, remote, env_fn in zip(self._work_remotes, self._remotes, env_fns):
             args = (work_remote, remote, CloudpickleWrapper(env_fn))
             # daemon=True: if the main process crashes, we should not cause things to hang
             # pytype: disable=attribute-error
@@ -182,3 +181,4 @@ class StaggeredSubprocVecEnv(VecEnv):
         """
         indices = self._get_indices(indices)
         return [self.remotes[i] for i in indices]
+

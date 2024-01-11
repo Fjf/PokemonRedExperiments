@@ -1,32 +1,10 @@
-from os.path import exists
-from pathlib import Path
-import uuid
-from red_gym_env import RedGymEnv
-from stable_baselines3 import A2C, PPO
-from stable_baselines3.common import env_checker
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
-from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.callbacks import CheckpointCallback
 import os
+import uuid
+from pathlib import Path
 
+from stable_baselines3 import PPO
 
-def make_env(rank, env_conf, seed=int(os.environ.get("SEED", 0))):
-    """
-    Utility function for multiprocessed env.
-    :param env_id: (str) the environment ID
-    :param num_env: (int) the number of environments you wish to have in subprocesses
-    :param seed: (int) the initial seed for RNG
-    :param rank: (int) index of the subprocess
-    """
-
-    def _init():
-        env = RedGymEnv(env_conf)
-        # env.seed(seed + rank)
-        return env
-
-    set_random_seed(seed)
-    return _init
-
+from utils import make_env
 
 if __name__ == '__main__':
 
@@ -41,7 +19,7 @@ if __name__ == '__main__':
     }
 
     num_cpu = 1  # 64 #46  # Also sets the number of episodes per training iteration
-    env = make_env(0, env_config)()  # SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
+    env = make_env(0, env_config, seed=int(os.environ.get("SEED", 0)))()  # SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
 
     # env_checker.check_env(env)
     file_name = 'session_4da05e87_main_good/poke_439746560_steps'
