@@ -13,14 +13,16 @@ from mpi_env import main_mpi, mpi_worker, StaggeredMPIEnv
 
 
 def main():
-    stagger_count = 2
-    ep_length = 2048 * 8
+    print(" I am loading")
+    stagger_count = 4
+    ep_length = 2048 * 4
+    max_steps = 2048 * 8
 
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
 
     env_config = {
         'headless': True, 'save_final_state': True, 'early_stop': False,
-        'action_freq': 24, 'init_state': '../has_pokedex_nballs.state', 'max_steps': ep_length,
+        'action_freq': 24, 'init_state': '../has_pokedex_nballs.state', 'max_steps': max_steps,
         'print_rewards': 100, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
         'gb_path': '../PokemonRed.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0,
         'use_screen_explore': True, 'extra_buttons': False
@@ -35,7 +37,7 @@ def main():
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
-    learn_steps = 40
+    learn_steps = 1
     file_name = 'session_995bee40/poke_7667712_steps'
 
     if exists(file_name + '.zip'):
@@ -58,7 +60,9 @@ def main():
         )
 
     for i in range(learn_steps):
-        model.learn(total_timesteps=ep_length * comm.Get_size() * 1000, callback=checkpoint_callback)
+        model.learn(total_timesteps=ep_length * comm.Get_size() * 1, callback=checkpoint_callback)
+
+    env.close()
 
 
 if __name__ == '__main__':

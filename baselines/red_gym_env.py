@@ -581,7 +581,7 @@ class RedGymEnv(Env):
             # 'op_poke': self.reward_scale*self.max_opponent_poke * 800,
             # 'money': self.reward_scale* money * 3,
             # 'seen_poke': self.reward_scale * seen_poke_count * 400,
-            'explore': self.reward_scale * self.get_knn_reward()
+            'explore': self.reward_scale * 0 * self.get_knn_reward()
         }
 
         return state_scores

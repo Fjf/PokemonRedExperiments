@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import time
 import traceback
 import warnings
 from typing import Any, Callable, List, Optional, Sequence, Type
@@ -159,7 +160,10 @@ def mpi_worker(comm: MPI.Comm, rank, env_fn_wrapper) -> None:
     reset_info: Optional[Dict[str, Any]] = {}
     while True:
         try:
+            while not comm.Iprobe():
+                time.sleep(1e-5)
             cmd, data = comm.recv()
+
             if cmd == "step":
                 observation, reward, terminated, truncated, info = env.step(data)
                 # convert to SB3 VecEnv api
