@@ -92,10 +92,12 @@ def main():
     for epoch in range(10):
         loss_sum = 0
         for minibatch, y in tqdm(dataloader):
+            y = y.to("cuda")
+            minibatch = minibatch.to("cuda")
             optim.zero_grad()
 
-            pred = model(minibatch.to("cuda"))
-            loss = ((pred - y.to("cuda")) ** 2).mean()
+            pred = model(minibatch)
+            loss = loss_fn(y, pred)
             loss.backward()
             loss_sum += loss.item()
 
