@@ -89,7 +89,7 @@ def main():
     optim = torch.optim.Adam(model.parameters(), lr=5e-3)
     loss_fn = MSELoss()
 
-    for epoch in range(100):
+    for epoch in range(10):
         loss_sum = 0
         for minibatch, y in tqdm(dataloader):
             optim.zero_grad()
