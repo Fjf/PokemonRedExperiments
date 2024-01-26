@@ -10,7 +10,7 @@ N_DATA_SAMPLES_TO_GENERATE = 2 ** 20 // SEND_CHUNK_SIZE  # ~1m
 def main_master(comm):
     n_workers = comm.size - 1
     batch_size = 128
-    prefetch_factor = 1
+    prefetch_factor = 4
 
     assert N_DATA_SAMPLES_TO_GENERATE % batch_size == 0
 
@@ -29,7 +29,7 @@ def main_master(comm):
             # Notify all to send message
             for j in range(0, batch_size):
                 # Current worker starts from 1
-                current_worker = 1 + ((i + j) % n_workers)
+                current_worker = 1 + (((i + prefetch_factor * batch_size) + j) % n_workers)
                 comm.send([0], dest=current_worker)  # Send ack
 
         # Receive data from all
