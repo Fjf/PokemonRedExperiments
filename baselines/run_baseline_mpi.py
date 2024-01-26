@@ -13,7 +13,6 @@ from mpi_env import main_mpi, mpi_worker, StaggeredMPIEnv
 
 
 def main():
-    print(" I am loading")
     stagger_count = 4
     ep_length = 2048 * 4
     max_steps = 2048 * 8
@@ -31,7 +30,7 @@ def main():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     if rank > 0:
-        main_mpi(env_config)
+        return main_mpi(env_config)
 
     env = StaggeredMPIEnv(comm, stagger_count=stagger_count)
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
