@@ -1,5 +1,5 @@
 import torch
-#from mamba_ssm import Mamba
+from mamba_ssm import Mamba
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
