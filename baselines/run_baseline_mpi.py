@@ -1,4 +1,3 @@
-import os
 import uuid
 from os.path import exists
 from pathlib import Path
@@ -7,13 +6,11 @@ from mpi4py import MPI
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from utils import make_env
-from fast_subproc_vec_env import StaggeredSubprocVecEnv
-from mpi_env import main_mpi, mpi_worker, StaggeredMPIEnv
+from mpi.mpi_env import main_mpi, StaggeredMPIEnv
 
 
 def main():
-    stagger_count = 4
+    stagger_count = 1
     ep_length = 2048 * 4
     max_steps = 2048 * 8
 

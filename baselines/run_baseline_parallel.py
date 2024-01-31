@@ -14,7 +14,7 @@ from red_gym_env import RedGymEnv
 
 
 def main():
-    stagger_count = 4
+    stagger_count = 1
     ep_length = 2048 * 4
     max_steps = 2048 * 8
 
@@ -33,7 +33,7 @@ def main():
     num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count())) // 2
 
     env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu * stagger_count)], stagger_count=stagger_count)
-
+    return env
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
