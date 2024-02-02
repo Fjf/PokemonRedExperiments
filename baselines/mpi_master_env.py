@@ -1,79 +1,19 @@
-import multiprocessing as mp
-import time
-import traceback
-import types
 import warnings
-from builtins import function
-from typing import Any, Callable, List, Optional, Sequence, Type
-from typing import Dict
+from typing import Sequence, Optional, List, Any, Type
 
 import gymnasium as gym
 import numpy as np
-from gym import Env
+from gymnasium import Env
 from mpi4py import MPI
-from stable_baselines3.common.env_util import is_wrapped
-from stable_baselines3.common.vec_env.base_vec_env import (
-    CloudpickleWrapper,
-    VecEnv,
-    VecEnvIndices,
-    VecEnvObs,
-    VecEnvStepReturn,
-)
-from stable_baselines3.common.vec_env.patch_gym import _patch_env
+from stable_baselines3.common.vec_env import VecEnv
+from stable_baselines3.common.vec_env.base_vec_env import VecEnvStepReturn, VecEnvObs, VecEnvIndices
 from stable_baselines3.common.vec_env.subproc_vec_env import _flatten_obs
 
-from red_gym_env import RedGymEnv
-from buffer import MPIRolloutBuffer
-from utils import make_env
-
-
-class RPCEnvWrapperWorker(RedGymEnv):
-    def __init__(self):
-        super().__init__()
-        self.prev_rewards = np.zeros(1)
-        self.buffer = MPIRolloutBuffer(buffer_size=1024, observation_space=self.observation_space,
-                                       action_space=self.action_space)
-        self.buffer_emit_batches = self.buffer.emit_batches
-
-    def buffer_add(self, observations, actions, rewards, episode_starts, values, log_probs):
-        self.buffer.add(observations, actions, self.prev_rewards, episode_starts, values, log_probs)
-        self.prev_rewards = rewards
-
-    def env_method(self, method, *args, **kwargs):
-        method = getattr(self, method)
-        return method(*args, **kwargs)
-
-    def get_attr(self, prop):
-        return getattr(self, prop)
-
-    def set_attr(self, prop, value):
-        return setattr(self, prop, value)
-
-    def is_wrapped(self, data):
-        return is_wrapped(self, data)
-
-
-class RPCEnvWrapper(RPCEnvWrapperWorker):
-    def __init__(self, comm, remote):  # noqa: we ignore super call because we want a dummy env for RPC
-        self.comm = comm
-        self.remote = remote
-
-        for method_name in dir(super()):
-            prop = super().__getattribute__(method_name)
-            if type(prop) == function:
-                self.__setattr__(method_name, self._rpc_wrapper(prop))
-
-    def _rpc_wrapper(self, method):
-        def _wrapper(*args, **kwargs):
-            assert kwargs is None
-            self.comm.send((method, args), self.remote)
-            return self.comm.recv(source=self.remote)
-
-        return _wrapper
+from mpi_worker_env import RPCEnvWrapper
 
 
 class MpiRPCVecEnv(VecEnv):
-    def __init__(self, comm: MPI.Comm, env_type=Env, max_steps=1):
+    def __init__(self, comm: MPI.Comm, *args, env_type=Env, max_steps=1, **kwargs):
         self.waiting = False
         self.closed = False
         self.env_type = env_type
@@ -87,7 +27,7 @@ class MpiRPCVecEnv(VecEnv):
         self.comm.send(("get_spaces", None), 1)
         observation_space, action_space = self.comm.recv(source=1)
 
-        self.remote_envs = [RPCEnvWrapper(comm=comm, remote=i) for i in range(1, 1 + self.worker_size)]
+        self.remote_envs = [RPCEnvWrapper(comm, i, *args, **kwargs) for i in range(1, 1 + self.worker_size)]
         self.indices = []
         super().__init__(self.n_envs, observation_space, action_space)
 
@@ -115,6 +55,12 @@ class MpiRPCVecEnv(VecEnv):
     def buffer_add(self, observations, actions, rewards, episode_starts, values, log_probs) -> None:
         [
             remote.buffer_add(observations[i], actions[i], rewards[i], episode_starts[i], values[i], log_probs[i])
+            for i, remote in enumerate(self.remote_envs)
+        ]
+
+    def buffer_reset(self) -> None:
+        [
+            remote.buffer_reset()
             for i, remote in enumerate(self.remote_envs)
         ]
 

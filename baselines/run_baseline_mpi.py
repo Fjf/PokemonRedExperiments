@@ -6,7 +6,9 @@ from mpi4py import MPI
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-from mpi.mpi_env import main_mpi, StaggeredMPIEnv
+from buffer import RemoteMPIRolloutBuffer
+from mpi_env import main_mpi
+from mpi_master_env import MpiRPCVecEnv
 
 
 def main():
@@ -29,7 +31,7 @@ def main():
     if rank > 0:
         return main_mpi(env_config)
 
-    env = StaggeredMPIEnv(comm, stagger_count=stagger_count)
+    env = MpiRPCVecEnv(comm, env_config)
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
@@ -56,6 +58,7 @@ def main():
         )
 
     for i in range(learn_steps):
+        model.rollout_buffer = RemoteMPIRolloutBuffer(comm, env)
         model.learn(total_timesteps=ep_length * comm.Get_size() * 1, callback=checkpoint_callback)
 
     env.close()
