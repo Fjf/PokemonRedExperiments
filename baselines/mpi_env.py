@@ -17,10 +17,10 @@ def mpi_worker(comm: MPI.Comm, rank, env_fn_wrapper) -> None:
     while True:
         while not comm.Iprobe():
             time.sleep(1e-5)
-        cmd, data = comm.recv()
+        cmd, args, kwargs = comm.recv()
 
         rpc_func = env.__getattribute__(cmd)
-        response = rpc_func(data)
+        response = rpc_func(*args, **kwargs)
         comm.send(response, 0)
 
         if cmd == "close":

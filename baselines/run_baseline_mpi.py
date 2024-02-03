@@ -1,3 +1,4 @@
+import traceback
 import uuid
 from os.path import exists
 from pathlib import Path
@@ -13,7 +14,7 @@ from mpi_master_env import MpiRPCVecEnv
 
 def main():
     stagger_count = 1
-    ep_length = 2048 * 4
+    ep_length = 128
     max_steps = 2048 * 8
 
     sess_path = Path(f'session_{str(uuid.uuid4())[:8]}')
@@ -23,7 +24,8 @@ def main():
         'action_freq': 24, 'init_state': '../has_pokedex_nballs.state', 'max_steps': max_steps,
         'print_rewards': 100, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
         'gb_path': '../PokemonRed.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0,
-        'use_screen_explore': True, 'extra_buttons': False
+        'use_screen_explore': True, 'extra_buttons': False,
+        'buffer_size': ep_length * stagger_count,
     }
 
     comm = MPI.COMM_WORLD
@@ -31,11 +33,11 @@ def main():
     if rank > 0:
         return main_mpi(env_config)
 
-    env = MpiRPCVecEnv(comm, env_config)
+    env = MpiRPCVecEnv(comm, env_config, ep_length=ep_length)
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')
     # env_checker.check_env(env)
-    learn_steps = 1
+    learn_steps = 40
     file_name = 'session_995bee40/poke_7667712_steps'
 
     if exists(file_name + '.zip'):
@@ -65,4 +67,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        MPI.COMM_WORLD.Abort(1)

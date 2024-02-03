@@ -1,17 +1,16 @@
 from typing import Generator
 
+import mpi4py.MPI
 import numpy as np
+import torch
 import torch as th
 from gymnasium import spaces
 from stable_baselines3.common.buffers import BaseBuffer
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
-from stable_baselines3.common.type_aliases import RolloutBufferSamples
+from stable_baselines3.common.type_aliases import RolloutBufferSamples, ReplayBufferSamples
 from tqdm import tqdm
 
 from mpi_master_env import MpiRPCVecEnv
-
-SEND_CHUNK_SIZE = 16
-N_DATA_SAMPLES_TO_GENERATE = 2 ** 20 // SEND_CHUNK_SIZE  # ~1m
 
 
 class MPIRolloutBuffer:
@@ -46,15 +45,35 @@ class MPIRolloutBuffer:
         self.reset()
 
     def reset(self) -> None:
-        self.observations = np.zeros((self.buffer_size, *self.obs_shape), dtype=np.float32)
-        self.actions = np.zeros((self.buffer_size, self.action_dim), dtype=np.float32)
-        self.rewards = np.zeros(self.buffer_size, dtype=np.float32)
-        self.returns = np.zeros(self.buffer_size, dtype=np.float32)
-        self.episode_starts = np.zeros(self.buffer_size, dtype=np.float32)
-        self.values = np.zeros(self.buffer_size, dtype=np.float32)
-        self.log_probs = np.zeros(self.buffer_size, dtype=np.float32)
-        self.advantages = np.zeros(self.buffer_size, dtype=np.float32)
+        self.observations = np.zeros((self.buffer_size, 1, *self.obs_shape), dtype=np.float32)
+        self.actions = np.zeros((self.buffer_size, 1, self.action_dim), dtype=np.float32)
+        self.rewards = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.returns = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.episode_starts = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.values = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.log_probs = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.advantages = np.zeros((self.buffer_size, 1), dtype=np.float32)
         self.generator_ready = False
+        self.pos = 0
+        self.full = False
+
+    def compute_returns_and_advantage(self, last_values: th.Tensor, dones: np.ndarray) -> None:
+        last_values = last_values.clone().cpu().numpy().flatten()
+
+        last_gae_lam = 0
+        for step in reversed(range(self.buffer_size)):
+            if step == self.buffer_size - 1:
+                next_non_terminal = 1.0 - dones
+                next_values = last_values
+            else:
+                next_non_terminal = 1.0 - self.episode_starts[step + 1]
+                next_values = self.values[step + 1]
+            delta = self.rewards[step] + self.gamma * next_values * next_non_terminal - self.values[step]
+            last_gae_lam = delta + self.gamma * self.gae_lambda * next_non_terminal * last_gae_lam
+            self.advantages[step] = last_gae_lam
+        # TD(lambda) estimator, see Github PR #375 or "Telescoping in TD(lambda)"
+        # in David Silver Lecture 4: https://www.youtube.com/watch?v=PnHCvfgC_ZA
+        self.returns = self.advantages + self.values
 
     def add(
             self,
@@ -122,13 +141,16 @@ class MPIRolloutBuffer:
         )
         return RolloutBufferSamples(*tuple(map(np.array, data)))
 
-    def emit_batches(self, comm):
+    def emit_batches(self, comm: mpi4py.MPI.Comm):
         for sample in self.get():
             ack = comm.recv(source=0)  # Recv request to send data
             comm.send(sample, dest=0)  # Send data
 
 
 class RemoteMPIRolloutBuffer:
+    returns: np.ndarray
+    values: np.ndarray
+
     def __init__(self, comm, env: MpiRPCVecEnv, prefetch_factor=1):
         self.prefetch_factor = prefetch_factor
         self.n_workers = comm.size - 1
@@ -141,19 +163,28 @@ class RemoteMPIRolloutBuffer:
     def reset(self):
         self.env.buffer_reset()
 
+    def compute_returns_and_advantage(self, *args, **kwargs):
+        rv_list = self.env.buffer_compute_returns_and_advantage(*args, **kwargs)
+        self.returns, self.values = map(np.array, zip(*rv_list))
+
     def get(self, batch_size=32):
+        def to_tensor(t):
+            return torch.as_tensor(t, device="cuda")
+
+        self.env.buffer_emit_batches()
+
         # Prefetch data from workers
         for i in range(0, self.prefetch_factor * batch_size):
             # Notify all to send message
             current_worker = 1 + (i % self.n_workers)
             self.comm.send([0], dest=current_worker)  # Send ack
-
-        bar = tqdm(total=N_DATA_SAMPLES_TO_GENERATE)
-        for i in range(0, N_DATA_SAMPLES_TO_GENERATE, batch_size):
+        n_samples = self.env.n_envs * self.env.ep_length
+        bar = tqdm(total=n_samples)
+        for i in range(0, n_samples, batch_size):
             batch = []
 
             # Request less based on prefetch factor (multiplied by batch count)
-            if i < N_DATA_SAMPLES_TO_GENERATE - (batch_size * self.prefetch_factor):
+            if i < n_samples - (batch_size * self.prefetch_factor):
                 # Notify all to send message
                 for j in range(0, batch_size):
                     # Current worker starts from 1
@@ -169,4 +200,9 @@ class RemoteMPIRolloutBuffer:
                 batch.append(sample)
                 bar.update()
 
-            yield np.array(batch)
+            big_batch = RolloutBufferSamples(*tuple(map(to_tensor, zip(*[tuple(e) for e in batch]))))
+            yield big_batch
+
+        # They will all send a 'None' when they are done sending data.
+        for worker in range(1, self.n_workers + 1):
+            self.comm.recv(source=worker)

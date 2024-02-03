@@ -37,6 +37,7 @@ class RedGymEnv(Env):
         self.early_stopping = config['early_stop']
         self.save_video = config['save_video']
         self.fast_video = config['fast_video']
+        self.buffer_size = config['buffer_size']
         self.video_interval = 256 * self.act_freq
         self.downsample_factor = 2
         self.frame_stacks = 6
