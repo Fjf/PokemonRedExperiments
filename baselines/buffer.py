@@ -30,7 +30,9 @@ class MPIRolloutBuffer:
             action_space: spaces.Space,
             gae_lambda: float = 1,
             gamma: float = 0.99,
+            n_workers: int = 1,
     ):
+        self.n_workers = n_workers
         self.buffer_size = buffer_size
         self.pos = 0
 
@@ -45,14 +47,14 @@ class MPIRolloutBuffer:
         self.reset()
 
     def reset(self) -> None:
-        self.observations = np.zeros((self.buffer_size, 1, *self.obs_shape), dtype=np.float32)
-        self.actions = np.zeros((self.buffer_size, 1, self.action_dim), dtype=np.float32)
-        self.rewards = np.zeros((self.buffer_size, 1), dtype=np.float32)
-        self.returns = np.zeros((self.buffer_size, 1), dtype=np.float32)
-        self.episode_starts = np.zeros((self.buffer_size, 1), dtype=np.float32)
-        self.values = np.zeros((self.buffer_size, 1), dtype=np.float32)
-        self.log_probs = np.zeros((self.buffer_size, 1), dtype=np.float32)
-        self.advantages = np.zeros((self.buffer_size, 1), dtype=np.float32)
+        self.observations = np.zeros((self.buffer_size, self.n_workers, *self.obs_shape), dtype=np.float32)
+        self.actions = np.zeros((self.buffer_size, self.n_workers, self.action_dim), dtype=np.float32)
+        self.rewards = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
+        self.returns = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
+        self.episode_starts = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
+        self.values = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
+        self.log_probs = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
+        self.advantages = np.zeros((self.buffer_size, self.n_workers), dtype=np.float32)
         self.generator_ready = False
         self.pos = 0
         self.full = False

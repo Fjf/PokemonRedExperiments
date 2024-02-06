@@ -6,6 +6,7 @@ from pathlib import Path
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from utils import make_env
 from fast_subproc_vec_env import StaggeredSubprocVecEnv
@@ -25,14 +26,15 @@ def main():
         'action_freq': 24, 'init_state': '../has_pokedex_nballs.state', 'max_steps': max_steps,
         'print_rewards': 100, 'save_video': False, 'fast_video': True, 'session_path': sess_path,
         'gb_path': '../PokemonRed.gb', 'debug': False, 'sim_frame_dist': 2_000_000.0,
-        'use_screen_explore': True, 'extra_buttons': False
+        'use_screen_explore': True, 'extra_buttons': False,
+        'buffer_size': ep_length * stagger_count,
     }
 
 
     # Get core count from SLURM or fall back on max CPUs on machine.
     num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count())) // 2
 
-    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu * stagger_count)], stagger_count=stagger_count)
+    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
     return env
     checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
                                              name_prefix='poke')

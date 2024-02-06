@@ -38,6 +38,7 @@ class RPCEnvWrapper(RPCEnvWrapperWorker):
             Tensors need to be moved to the CPU when sending them over MPI, as we cannot guarantee that the
              recipient has access to a GPU.
             """
+
             def t_c(arg):
                 if type(arg) == torch.Tensor:
                     return arg.to("cpu")
@@ -75,11 +76,13 @@ class MpiRPCVecEnv(VecEnv):
 
         self.remote_envs = [RPCEnvWrapper(comm, i, *args, **kwargs) for i in range(1, 1 + self.worker_size)]
         self.indices = []
+        self.worker_dims = {}
         super().__init__(self.n_envs, observation_space, action_space)
 
     def step_async(self, actions: np.ndarray) -> None:
+
         self.results = self._await_workers([
-            remote.step(actions[i])
+            remote.step(actions[self.worker_dims[i][0]:self.worker_dims[i][1]])
             for i, remote in enumerate(self.remote_envs)
         ])
         self.waiting = True
@@ -92,9 +95,15 @@ class MpiRPCVecEnv(VecEnv):
 
     def reset(self) -> VecEnvObs:
         results = self._await_workers([
-            remote.reset(self._seeds[env_idx % self.n_envs])
+            remote.reset()
             for env_idx, remote in enumerate(self.remote_envs)
         ])
+        if len(self.worker_dims) == 0:  # We dont know how many subworkers each worker-manager has.
+            total = 0
+            for i, result in enumerate(results):
+                self.worker_dims[i] = (total, total + len(result))
+                total += len(result)
+            self.num_envs = total
 
         obs, self.reset_infos = zip(*results)
         # Seeds are only used once
@@ -108,7 +117,7 @@ class MpiRPCVecEnv(VecEnv):
         ])
 
     def buffer_reset(self) -> None:
-        data = self._await_workers([
+        self._await_workers([
             remote.buffer_reset()
             for i, remote in enumerate(self.remote_envs)
         ])
@@ -151,7 +160,10 @@ class MpiRPCVecEnv(VecEnv):
 
     @staticmethod
     def _await_workers(partials):
-        return [p() for p in partials]
+        responses = [p() for p in partials]
+        if type(responses[0]) == list:
+            return [item for row in responses for item in row]  # Create single list instead of nested
+        return responses
 
     def get_attr(self, attr_name: str, indices: VecEnvIndices = None) -> List[Any]:
         """Return attribute from vectorized environment (see base class)."""

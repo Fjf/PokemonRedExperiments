@@ -2,30 +2,21 @@ from typing import Optional, Any, Dict
 
 import mpi4py.MPI
 import numpy as np
-from stable_baselines3.common.env_util import is_wrapped
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from red_gym_env import RedGymEnv
+from fast_subproc_vec_env import StaggeredSubprocVecEnv
 
 
-class RPCEnvWrapperWorker(RedGymEnv):
+class RPCEnvWrapperWorker(StaggeredSubprocVecEnv):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from buffer import MPIRolloutBuffer
-        self.prev_rewards = np.zeros(1)
-        self.buffer = MPIRolloutBuffer(buffer_size=self.buffer_size, observation_space=self.observation_space,
-                                       action_space=self.action_space)
-        self.reset_info: Optional[Dict[str, Any]] = {}
 
-    def step(self, *args):
-        observation, reward, terminated, truncated, info = super().step(*args)
-        # convert to SB3 VecEnv api
-        done = terminated or truncated
-        info["TimeLimit.truncated"] = truncated and not terminated
-        if done:
-            # save final observation where user can get it, then reset
-            info["terminal_observation"] = observation
-            observation, self.reset_info = self.reset()
-        return observation, reward, done, info, self.reset_info
+        self.buffer_size = self.get_attr("buffer_size", indices=0)[0]
+        self.prev_rewards = np.zeros(self.num_envs)
+        self.buffer = MPIRolloutBuffer(buffer_size=self.buffer_size, observation_space=self.observation_space,
+                                       action_space=self.action_space, n_workers=self.num_envs)
+        self.reset_info: Optional[Dict[str, Any]] = {}
 
     def buffer_compute_returns_and_advantage(self, *args, **kwargs):
         self.buffer.compute_returns_and_advantage(*args, **kwargs)
@@ -45,14 +36,8 @@ class RPCEnvWrapperWorker(RedGymEnv):
         method = getattr(self, method)
         return method(*args, **kwargs)
 
-    def get_attr(self, prop):
-        return getattr(self, prop)
-
-    def set_attr(self, prop, value):
-        return setattr(self, prop, value)
-
     def is_wrapped(self, data):
-        return is_wrapped(self, data)
+        return self.env_is_wrapped(data)
 
     def get_spaces(self):
         return self.observation_space, self.action_space
