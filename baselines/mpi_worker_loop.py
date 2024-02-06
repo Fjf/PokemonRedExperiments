@@ -3,11 +3,6 @@ import time
 import traceback
 
 from mpi4py import MPI
-from stable_baselines3.common.vec_env import SubprocVecEnv
-from stable_baselines3.common.vec_env.base_vec_env import (
-    CloudpickleWrapper,
-)
-from stable_baselines3.common.vec_env.patch_gym import _patch_env
 
 from mpi_worker_env import RPCEnvWrapperWorker
 from utils import make_env

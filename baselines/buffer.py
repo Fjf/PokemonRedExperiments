@@ -7,7 +7,7 @@ import torch as th
 from gymnasium import spaces
 from stable_baselines3.common.buffers import BaseBuffer
 from stable_baselines3.common.preprocessing import get_action_dim, get_obs_shape
-from stable_baselines3.common.type_aliases import RolloutBufferSamples, ReplayBufferSamples
+from stable_baselines3.common.type_aliases import RolloutBufferSamples
 from tqdm import tqdm
 
 from mpi_master_env import MpiRPCVecEnv
