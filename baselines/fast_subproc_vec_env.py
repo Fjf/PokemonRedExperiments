@@ -89,7 +89,10 @@ class StaggeredSubprocVecEnv(VecEnv):
     def __init__(self, env_fns: List[Callable[[], gym.Env]], start_method: Optional[str] = None, stagger_count=1):
         self.waiting = False
         self.closed = False
+
         self.n_envs = len(env_fns) // stagger_count
+
+        print("Worker size", self.n_envs)
 
         if start_method is None:
             # Fork is not a thread safe method (see issue #217)
@@ -116,7 +119,6 @@ class StaggeredSubprocVecEnv(VecEnv):
             self.processes.append(process)
             work_remote.close()
 
-
         self.remotes[0].send(("get_spaces", None))
         observation_space, action_space = self.remotes[0].recv()
         super().__init__(self.n_envs, observation_space, action_space)
@@ -141,8 +143,9 @@ class StaggeredSubprocVecEnv(VecEnv):
         remotes = self.remotes
         self.stagger = (self.stagger + 1) % self.stagger_count
 
+        assert len(actions) == len(remotes), "Action count does not equal simulation count."
         for i, remote in enumerate(remotes):
-            remote.send(("step", actions[i % len(actions)]))
+            remote.send(("step", actions[i]))
         self.waiting = True
 
     def step_wait(self) -> List:
@@ -151,9 +154,9 @@ class StaggeredSubprocVecEnv(VecEnv):
         return results
 
     def reset(self) -> List:
-        if self.stagger != -1:
-            # Cleanup in-transit messages
-            self.step_wait()
+        # if self.stagger != -1:
+        #     # Cleanup in-transit messages
+        #     self.step_wait()
 
         for env_idx, remote in enumerate(self._remotes):
             remote.send(("reset", None))

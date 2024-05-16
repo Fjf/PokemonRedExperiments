@@ -12,13 +12,16 @@ from mpi_worker_loop import main_mpi
 from mpi_master_env import MpiRPCVecEnv
 from utils import make_env
 
-
+GAE_LAMBDA = 0.95
+GAMMA = 0.999
 def main():
     stagger_count = 1
-    ep_length = 512
+    # ep_length = 512
+    ep_length = 2048 * 8
     max_steps = 2048 * 8
 
-    sess_path = Path(f'/scratch-shared/duncank/session_{str(uuid.uuid4())[:8]}')
+    # sess_path = Path(f'/scratch-shared/duncank/session_{str(uuid.uuid4())[:8]}')
+    sess_path = Path(f'/tmp/session_{str(uuid.uuid4())[:8]}')
 
     env_config = {
         'headless': True, 'save_final_state': True, 'early_stop': False,
@@ -32,13 +35,16 @@ def main():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     if rank > 0:
-        return main_mpi(env_config)
+        return main_mpi(env_config, gamma=GAMMA, gae_lambda=GAE_LAMBDA)
 
+    print([make_env(0, env_config)])
     env = MpiRPCVecEnv(comm, [make_env(0, env_config)], ep_length=ep_length, start_method="fork")
-    checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
-                                             name_prefix='poke')
+    checkpoint_callback = CheckpointCallback(
+        save_freq=ep_length * stagger_count, save_path=sess_path,
+        name_prefix='poke'
+    )
     # env_checker.check_env(env)
-    learn_steps = 1
+    learn_steps = 40
     file_name = 'session_995bee40/poke_7667712_steps'
 
     if exists(file_name + '.zip'):
@@ -55,14 +61,19 @@ def main():
             env,
             verbose=1,
             n_steps=ep_length * stagger_count,
-            batch_size=128,
+            # batch_size=2,
+            batch_size=512,
             n_epochs=1,
-            gamma=0.999
+            gamma=GAMMA,
+            gae_lambda=GAE_LAMBDA,
         )
 
-    for i in range(learn_steps):
-        model.rollout_buffer = RemoteMPIRolloutBuffer(comm, env)
-        model.learn(total_timesteps=ep_length * comm.Get_size() * 1, callback=checkpoint_callback)
+    model.rollout_buffer = RemoteMPIRolloutBuffer(comm, env)
+
+    results = env.reset()  # Get how many workers we have.
+    print(f"We have {len(results)} workers")
+
+    model.learn(total_timesteps=max_steps * len(results) * learn_steps, callback=checkpoint_callback)
 
     env.close()
 

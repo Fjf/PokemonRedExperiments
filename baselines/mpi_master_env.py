@@ -75,12 +75,12 @@ class MpiRPCVecEnv(VecEnv):
         observation_space, action_space = self.comm.recv(source=1)
 
         self.remote_envs = [RPCEnvWrapper(comm, i, *args, **kwargs) for i in range(1, 1 + self.worker_size)]
+
         self.indices = []
         self.worker_dims = {}
         super().__init__(self.n_envs, observation_space, action_space)
 
     def step_async(self, actions: np.ndarray) -> None:
-
         self.results = self._await_workers([
             remote.step(actions[self.worker_dims[i][0]:self.worker_dims[i][1]])
             for i, remote in enumerate(self.remote_envs)
@@ -98,11 +98,14 @@ class MpiRPCVecEnv(VecEnv):
             remote.reset()
             for env_idx, remote in enumerate(self.remote_envs)
         ])
-        if len(self.worker_dims) == 0:  # We dont know how many subworkers each worker-manager has.
+        if len(self.worker_dims) == 0:  # We don't know how many sub-workers each worker-manager has.
+            assert len(results) % len(self.remote_envs) == 0, "We only support homogeneous worker-managers."
+            manager_size = len(results) // len(self.remote_envs)
             total = 0
-            for i, result in enumerate(results):
-                self.worker_dims[i] = (total, total + len(result))
-                total += len(result)
+
+            for i, result in enumerate(range(0, len(results), manager_size)):
+                self.worker_dims[i] = (total, total + manager_size)
+                total += manager_size
             self.num_envs = total
 
         obs, self.reset_infos = zip(*results)
@@ -111,6 +114,13 @@ class MpiRPCVecEnv(VecEnv):
         return _flatten_obs(obs, self.observation_space)
 
     def buffer_add(self, observations, actions, rewards, episode_starts, values, log_probs) -> None:
+        """
+        `observations` and `episode_starts` are from :math:`t_{-1}`. All others are from current iteration.
+        If we want to stagger computation, we need to track all data until we have a set :math:`t_{-1} + t_{0}` complete.
+        In the case of staggered computation, :math:`t_{-1}` is actually :math:`t_{-1}` from worker `n - 1`.
+        This means we need to store :math:`t_{-1}` until worker `n - 1` is done with it's next step.
+        """
+
         self._await_workers([
             remote.buffer_add(observations[i], actions[i], rewards[i], episode_starts[i], values[i], log_probs[i])
             for i, remote in enumerate(self.remote_envs)

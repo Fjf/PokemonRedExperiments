@@ -13,7 +13,6 @@ from fast_subproc_vec_env import StaggeredSubprocVecEnv
 from red_gym_env import RedGymEnv
 
 
-
 def main():
     stagger_count = 1
     ep_length = 2048 * 4
@@ -30,14 +29,14 @@ def main():
         'buffer_size': ep_length * stagger_count,
     }
 
-
     # Get core count from SLURM or fall back on max CPUs on machine.
-    num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count())) // 2
+    num_cpu = int(os.environ.get("SLURM_CPUS_ON_NODE", os.cpu_count()))
 
-    env = StaggeredSubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
-    return env
-    checkpoint_callback = CheckpointCallback(save_freq=ep_length * stagger_count, save_path=sess_path,
-                                             name_prefix='poke')
+    env = SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
+    checkpoint_callback = CheckpointCallback(
+        save_freq=ep_length * stagger_count, save_path=sess_path,
+        name_prefix='poke'
+    )
     # env_checker.check_env(env)
     learn_steps = 40
     file_name = 'session_995bee40/poke_7667712_steps'
@@ -55,11 +54,19 @@ def main():
             'CnnPolicy',
             env,
             verbose=1,
-            learning_rate=1e-3,
             n_steps=ep_length * stagger_count,
             batch_size=512,
             n_epochs=1,
             gamma=0.999
+        )
+        from buffer import MPIRolloutBuffer
+        model.rollout_buffer = MPIRolloutBuffer(
+            model.rollout_buffer.buffer_size,
+            observation_space=model.rollout_buffer.observation_space,
+            action_space=model.rollout_buffer.action_space,
+            gae_lambda=model.rollout_buffer.gae_lambda,
+            gamma=model.rollout_buffer.gamma,
+            n_workers=model.rollout_buffer.n_envs
         )
 
     for i in range(learn_steps):

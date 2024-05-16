@@ -1,3 +1,6 @@
+import os
+from collections import defaultdict
+from functools import partial
 from typing import Generator
 
 import mpi4py.MPI
@@ -11,6 +14,21 @@ from stable_baselines3.common.type_aliases import RolloutBufferSamples
 from tqdm import tqdm
 
 from mpi_master_env import MpiRPCVecEnv
+
+
+def to_torch(array: np.ndarray, device: str = "cpu", copy: bool = True) -> th.Tensor:
+    """
+    Convert a numpy array to a PyTorch tensor.
+    Note: it copies the data by default
+
+    :param array:
+    :param copy: Whether to copy or not the data (may be useful to avoid changing things
+        by reference). This argument is inoperative if the device is not the CPU.
+    :return:
+    """
+    if copy:
+        return th.tensor(array, device=device)
+    return th.as_tensor(array, device=device)
 
 
 class MPIRolloutBuffer:
@@ -108,7 +126,14 @@ class MPIRolloutBuffer:
         if self.pos == self.buffer_size:
             self.full = True
 
-    def get(self) -> Generator[RolloutBufferSamples, None, None]:
+    def get(self, batch_size=1, output_type: str = "torch") -> Generator[RolloutBufferSamples, None, None]:
+        if output_type == "torch":
+            map_fn = partial(to_torch, device="cpu")
+        elif output_type == "numpy":
+            map_fn = np.array
+        else:
+            raise ValueError(f"Invalid `output_type(={output_type})` passed.")
+
         assert self.full, ""
         indices = np.random.permutation(self.buffer_size)
         # Prepare the data
@@ -126,12 +151,22 @@ class MPIRolloutBuffer:
                 self.__dict__[tensor] = BaseBuffer.swap_and_flatten(self.__dict__[tensor])
             self.generator_ready = True
 
-        for i in range(self.buffer_size):
-            yield self._get_samples(indices[i])
+        # Return everything, don't create minibatches
+        if batch_size is None:
+            batch_size = self.buffer_size * self.n_workers
+
+        start_idx = 0
+        while start_idx < self.buffer_size * self.n_workers:
+            yield self._get_samples(indices[start_idx: start_idx + batch_size], map_fn=map_fn)
+            start_idx += batch_size
+
+        # for i in range(self.buffer_size):
+        #     yield self._get_samples(indices[i])
 
     def _get_samples(
             self,
             batch_inds: np.ndarray,
+            map_fn=np.array,
     ) -> RolloutBufferSamples:
         data = (
             self.observations[batch_inds],
@@ -141,10 +176,10 @@ class MPIRolloutBuffer:
             self.advantages[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
         )
-        return RolloutBufferSamples(*tuple(map(np.array, data)))
+        return RolloutBufferSamples(*tuple(map(map_fn, data)))
 
     def emit_batches(self, comm: mpi4py.MPI.Comm):
-        for sample in self.get():
+        for sample in self.get(batch_size=1, output_type="numpy"):
             ack = comm.recv(source=0)  # Recv request to send data
             comm.send(sample, dest=0)  # Send data
 
@@ -158,6 +193,7 @@ class RemoteMPIRolloutBuffer:
         self.n_workers = comm.size - 1
         self.env = env
         self.comm = comm
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def add(self, *args):
         self.env.buffer_add(*args)
@@ -171,7 +207,7 @@ class RemoteMPIRolloutBuffer:
 
     def get(self, batch_size=32):
         def to_tensor(t):
-            return torch.as_tensor(t, device="cuda")
+            return torch.as_tensor(t, device=self.device)
 
         self.env.buffer_emit_batches()
 
@@ -183,7 +219,14 @@ class RemoteMPIRolloutBuffer:
         n_samples = self.env.n_envs * self.env.ep_length
         bar = tqdm(total=n_samples)
         for i in range(0, n_samples, batch_size):
+            # "observations",
+            # "actions",
+            # "values",
+            # "log_probs",
+            # "advantages",
+            # "returns",
             batch = []
+            batch_test = defaultdict(list)
 
             # Request less based on prefetch factor (multiplied by batch count)
             if i < n_samples - (batch_size * self.prefetch_factor):
@@ -199,10 +242,25 @@ class RemoteMPIRolloutBuffer:
                 current_worker = 1 + ((i + j) % self.n_workers)
                 sample = self.comm.recv(source=current_worker)  # Recv data
 
-                batch.append(sample)
+                # batch.append(sample)
+                for sample_idx, chunk in enumerate(sample):
+                    batch_test[sample_idx].append(chunk)
                 bar.update()
 
-            big_batch = RolloutBufferSamples(*tuple(map(to_tensor, zip(*[tuple(e) for e in batch]))))
+            data = (
+                to_tensor(np.concatenate(batch_test[x]))
+                for x in range(len(batch_test.items()))
+            )
+
+            # print(batch)
+            # data = tuple(
+            #     map(
+            #         to_tensor,
+            #         zip(*[tuple(e) for e in batch])
+            #     )
+            # )
+            # print(data)
+            big_batch = RolloutBufferSamples(*data)
             yield big_batch
 
         # They will all send a 'None' when they are done sending data.

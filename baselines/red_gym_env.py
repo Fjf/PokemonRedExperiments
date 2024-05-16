@@ -1,3 +1,4 @@
+import random
 from collections import defaultdict
 import sys
 import uuid
@@ -123,7 +124,7 @@ class RedGymEnv(Env):
 
     def reset(self, seed=None, rank=None, **kwargs):
         self.rank = rank
-        self.seed = seed
+        self.seed = random.randint(1, int(1e32))
         # restart game, skipping credits
         with open(self.init_state, "rb") as f:
             self.pyboy.load_state(f)
@@ -577,12 +578,12 @@ class RedGymEnv(Env):
             'level': self.reward_scale * self.get_levels_reward(),
             'heal': self.reward_scale * self.total_healing_rew,
             'op_lvl': self.reward_scale * self.update_max_op_level(),
-            'dead': self.reward_scale * -0.000001 * self.died_count,
+            'dead': self.reward_scale * -0.01 * self.died_count,
             'badge': self.reward_scale * self.get_badges() * 5,
             # 'op_poke': self.reward_scale*self.max_opponent_poke * 800,
             # 'money': self.reward_scale* money * 3,
             # 'seen_poke': self.reward_scale * seen_poke_count * 400,
-            'explore': self.reward_scale * 0 * self.get_knn_reward()
+            'explore': self.reward_scale * self.get_knn_reward()
         }
 
         return state_scores
