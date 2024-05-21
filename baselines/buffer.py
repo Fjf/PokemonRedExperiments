@@ -135,7 +135,7 @@ class MPIRolloutBuffer:
             raise ValueError(f"Invalid `output_type(={output_type})` passed.")
 
         assert self.full, ""
-        indices = np.random.permutation(self.buffer_size)
+        indices = np.random.permutation(self.buffer_size * self.n_workers)
         # Prepare the data
         if not self.generator_ready:
             _tensor_names = [
@@ -176,9 +176,13 @@ class MPIRolloutBuffer:
             self.advantages[batch_inds].flatten(),
             self.returns[batch_inds].flatten(),
         )
+        # print(self.observations.shape, self.observations[batch_inds], batch_inds)
         return RolloutBufferSamples(*tuple(map(map_fn, data)))
 
     def emit_batches(self, comm: mpi4py.MPI.Comm):
+        # Send ping to communicate to master we are ready to send.
+        comm.send([0], dest=0)
+
         for sample in self.get(batch_size=1, output_type="numpy"):
             ack = comm.recv(source=0)  # Recv request to send data
             comm.send(sample, dest=0)  # Send data
@@ -211,12 +215,20 @@ class RemoteMPIRolloutBuffer:
 
         self.env.buffer_emit_batches()
 
+        # Await all workers ready to receive data
+        for worker_id in range(1, self.n_workers + 1):
+            ack = self.comm.recv(source=worker_id)
+
+        a = [0] * (self.n_workers + 1)
         # Prefetch data from workers
         for i in range(0, self.prefetch_factor * batch_size):
             # Notify all to send message
             current_worker = 1 + (i % self.n_workers)
-            self.comm.send([0], dest=current_worker)  # Send ack
-        n_samples = self.env.n_envs * self.env.ep_length
+            self.comm.send([a[current_worker]], dest=current_worker)  # Send ack
+            a[current_worker] += 1
+
+        n_samples = self.env.num_envs * self.env.ep_length
+
         bar = tqdm(total=n_samples)
         for i in range(0, n_samples, batch_size):
             # "observations",
@@ -234,7 +246,10 @@ class RemoteMPIRolloutBuffer:
                 for j in range(0, batch_size):
                     # Current worker starts from 1
                     current_worker = 1 + (((i + self.prefetch_factor * batch_size) + j) % self.n_workers)
-                    self.comm.send([0], dest=current_worker)  # Send ack
+                    self.comm.send([a[current_worker]], dest=current_worker)  # Send ack
+                    a[current_worker] += 1
+
+            # print("Totals requested:", a)
 
             # Receive data from all
             for j in range(0, batch_size):
@@ -251,7 +266,6 @@ class RemoteMPIRolloutBuffer:
                 to_tensor(np.concatenate(batch_test[x]))
                 for x in range(len(batch_test.items()))
             )
-
             # print(batch)
             # data = tuple(
             #     map(

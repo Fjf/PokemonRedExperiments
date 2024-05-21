@@ -16,8 +16,8 @@ GAE_LAMBDA = 0.95
 GAMMA = 0.999
 def main():
     stagger_count = 1
-    # ep_length = 512
-    ep_length = 2048 * 8
+    ep_length = 1024
+    # ep_length = 2048 * 4
     max_steps = 2048 * 8
 
     # sess_path = Path(f'/scratch-shared/duncank/session_{str(uuid.uuid4())[:8]}')
