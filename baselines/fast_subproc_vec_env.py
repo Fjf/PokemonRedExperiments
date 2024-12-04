@@ -1,6 +1,6 @@
 import multiprocessing as mp
 import warnings
-from typing import Any, Callable, List, Optional, Sequence, Type
+from typing import Any, Callable, List, Optional, Sequence, Type, Dict
 
 import gymnasium as gym
 import numpy as np
@@ -8,10 +8,58 @@ from stable_baselines3.common.vec_env.base_vec_env import (
     CloudpickleWrapper,
     VecEnv,
     VecEnvIndices,
-    VecEnvObs,
-    VecEnvStepReturn,
 )
-from stable_baselines3.common.vec_env.subproc_vec_env import _flatten_obs
+from stable_baselines3.common.vec_env.patch_gym import _patch_env
+
+
+def _worker(
+        remote: mp.connection.Connection,
+        parent_remote: mp.connection.Connection,
+        env_fn_wrapper: CloudpickleWrapper,
+) -> None:
+    # Import here to avoid a circular import
+    from stable_baselines3.common.env_util import is_wrapped
+
+    parent_remote.close()
+    env = _patch_env(env_fn_wrapper.var())
+    reset_info: Optional[Dict[str, Any]] = {}
+    while True:
+        try:
+            cmd, data = remote.recv()
+            if cmd == "step":
+                observation, reward, terminated, truncated, info = env.step(data)
+                # convert to SB3 VecEnv api
+                done = terminated or truncated
+                info["TimeLimit.truncated"] = truncated and not terminated
+                if done:
+                    # save final observation where user can get it, then reset
+                    info["terminal_observation"] = observation
+                    observation, reset_info = env.reset()
+                remote.send((observation, reward, done, info, reset_info))
+            elif cmd == "reset":
+                observation, reset_info = env.reset()
+                remote.send((observation, reset_info))
+            elif cmd == "render":
+                remote.send(env.render())
+            elif cmd == "close":
+                env.close()
+                remote.close()
+                break
+            elif cmd == "get_spaces":
+                remote.send((env.observation_space, env.action_space))
+            elif cmd == "env_method":
+                method = getattr(env, data[0])
+                remote.send(method(*data[1], **data[2]))
+            elif cmd == "get_attr":
+                remote.send(getattr(env, data))
+            elif cmd == "set_attr":
+                remote.send(setattr(env, data[0], data[1]))  # type: ignore[func-returns-value]
+            elif cmd == "is_wrapped":
+                remote.send(is_wrapped(env, data))
+            else:
+                raise NotImplementedError(f"`{cmd}` is not implemented in the worker")
+        except EOFError:
+            break
 
 
 class StaggeredSubprocVecEnv(VecEnv):
@@ -38,10 +86,13 @@ class StaggeredSubprocVecEnv(VecEnv):
            Defaults to 'forkserver' on available platforms, and 'spawn' otherwise.
     """
 
-    def __init__(self, env_fns: List[Callable[[], gym.Env]], start_method: Optional[str] = None):
+    def __init__(self, env_fns: List[Callable[[], gym.Env]], start_method: Optional[str] = None, stagger_count=1):
         self.waiting = False
         self.closed = False
-        n_envs = len(env_fns)
+
+        self.n_envs = len(env_fns) // stagger_count
+
+        print("Worker size", self.n_envs)
 
         if start_method is None:
             # Fork is not a thread safe method (see issue #217)
@@ -49,11 +100,16 @@ class StaggeredSubprocVecEnv(VecEnv):
             # a `if __name__ == "__main__":`)
             forkserver_available = "forkserver" in mp.get_all_start_methods()
             start_method = "forkserver" if forkserver_available else "spawn"
+        print("Startmethod", start_method)
         ctx = mp.get_context(start_method)
 
-        self.remotes, self.work_remotes = zip(*[ctx.Pipe() for _ in range(n_envs)])
+
+        self.stagger = -1
+        self.stagger_count = stagger_count
+
+        self._remotes, self._work_remotes = zip(*[ctx.Pipe() for _ in range(self.n_envs * stagger_count)])
         self.processes = []
-        for work_remote, remote, env_fn in zip(self.work_remotes, self.remotes, env_fns):
+        for work_remote, remote, env_fn in zip(self._work_remotes, self._remotes, env_fns):
             args = (work_remote, remote, CloudpickleWrapper(env_fn))
             # daemon=True: if the main process crashes, we should not cause things to hang
             # pytype: disable=attribute-error
@@ -65,49 +121,49 @@ class StaggeredSubprocVecEnv(VecEnv):
 
         self.remotes[0].send(("get_spaces", None))
         observation_space, action_space = self.remotes[0].recv()
+        super().__init__(self.n_envs, observation_space, action_space)
 
-        self.stagger = -1
+    @property
+    def remotes(self):
+        # The below statement is true by definition
+        # assert len(self._remotes) % self.stagger_count == 0
+        part = len(self._remotes) // self.stagger_count
+        next_stagger = (self.stagger + 1) % self.stagger_count
 
-        super().__init__(len(env_fns), observation_space, action_space)
+        # First time return everything (send all processes initial state)
+        if self.stagger == -1:
+            return self._remotes
+
+        if next_stagger == 0:
+            return self._remotes[self.stagger * part:]
+        else:
+            return self._remotes[self.stagger * part:next_stagger * part]
 
     def step_async(self, actions: np.ndarray) -> None:
-        half = len(self.remotes) // 2
-        if self.stagger == -1:
-            remotes = self.remotes
-            self.stagger = 0
-        elif self.stagger == 0:
-            remotes = self.remotes[:half]
-            self.stagger = 1
-        elif self.stagger == 1:
-            remotes = self.remotes[half:]
-            self.stagger = 0
-        else:
-            raise RuntimeError("Invalid stagger found.")
+        remotes = self.remotes
+        self.stagger = (self.stagger + 1) % self.stagger_count
 
-        for remote, action in zip(remotes, actions):
-            remote.send(("step", action))
+        assert len(actions) == len(remotes), "Action count does not equal simulation count."
+        for i, remote in enumerate(remotes):
+            remote.send(("step", actions[i]))
         self.waiting = True
 
-    def step_wait(self) -> VecEnvStepReturn:
-        half = len(self.remotes) // 2
-        if self.stagger == 0:
-            remotes = self.remotes[:half]
-        else:
-            remotes = self.remotes[half:]
-
-        results = [remote.recv() for remote in remotes]
-        self.waiting = False
-        obs, rews, dones, infos, self.reset_infos = zip(*results)
-        return _flatten_obs(obs, self.observation_space), np.stack(rews), np.stack(dones), infos
-
-    def reset(self) -> VecEnvObs:
-        for env_idx, remote in enumerate(self.remotes):
-            remote.send(("reset", self._seeds[env_idx]))
+    def step_wait(self) -> List:
         results = [remote.recv() for remote in self.remotes]
-        obs, self.reset_infos = zip(*results)
-        # Seeds are only used once
-        self._reset_seeds()
-        return _flatten_obs(obs, self.observation_space)
+        self.waiting = False
+        return results
+
+    def reset(self) -> List:
+        # if self.stagger != -1:
+        #     # Cleanup in-transit messages
+        #     self.step_wait()
+
+        for env_idx, remote in enumerate(self._remotes):
+            remote.send(("reset", None))
+
+        # We receive data from everybody, then drop unnecessary data.
+        results = [remote.recv() for remote in self._remotes][:self.n_envs]
+        return results
 
     def close(self) -> None:
         if self.closed:

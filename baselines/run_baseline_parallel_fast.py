@@ -1,28 +1,13 @@
+import uuid
 from os.path import exists
 from pathlib import Path
-import uuid
-from red_gym_env import RedGymEnv
-from stable_baselines3 import PPO
-from stable_baselines3.common import env_checker
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
-from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
-from tensorboard_callback import TensorboardCallback
 
-def make_env(rank, env_conf, seed=0):
-    """
-    Utility function for multiprocessed env.
-    :param env_id: (str) the environment ID
-    :param num_env: (int) the number of environments you wish to have in subprocesses
-    :param seed: (int) the initial seed for RNG
-    :param rank: (int) index of the subprocess
-    """
-    def _init():
-        env = RedGymEnv(env_conf)
-        env.reset(seed=(seed + rank))
-        return env
-    set_random_seed(seed)
-    return _init
+from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
+from stable_baselines3.common.vec_env import SubprocVecEnv
+
+from utils import make_env
+from tensorboard_callback import TensorboardCallback
 
 if __name__ == '__main__':
 
@@ -41,7 +26,7 @@ if __name__ == '__main__':
             }
     
     print(env_config)
-    
+
     num_cpu = 4  # Also sets the number of episodes per training iteration
     env = SubprocVecEnv([make_env(i, env_config) for i in range(num_cpu)])
     
